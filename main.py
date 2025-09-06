@@ -26,7 +26,7 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 if not gemini_api_key:
     logger.warning("GEMINI_API_KEY not found in environment variables")
 genai.configure(api_key=gemini_api_key)
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 # Initialize FastAPI
 app = FastAPI(
