@@ -1,3 +1,8 @@
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-green)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-purple)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
 # 🤖 AI Research Agent
 
 An intelligent web research assistant that leverages AI to find, extract, and summarize information from across the web.
