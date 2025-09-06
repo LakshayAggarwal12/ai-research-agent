@@ -13,13 +13,10 @@ from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import time
 import google.generativeai as genai
-import asyncio
-import httpx
-from httpx import Timeout
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 # Load environment variables
 load_dotenv()
@@ -29,8 +26,6 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 if not gemini_api_key:
     logger.warning("GEMINI_API_KEY not found in environment variables")
 genai.configure(api_key=gemini_api_key)
-
-# Use gemini-1.5-flash (most widely available and cheaper)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Initialize FastAPI
@@ -41,7 +36,7 @@ app = FastAPI(
 )
 
 # Get the current directory and setup paths
-current_dir = Path(__file__).parent
+current_dir = Path(_file_).parent
 templates_dir = current_dir / "templates"
 static_dir = current_dir / "static"
 
@@ -123,61 +118,6 @@ def fetch_hn_search_results(query: str, limit: int = 5):
         logger.error(f"Hacker News search failed: {e}")
         return []
 
-# DuckDuckGo Search function
-def resolve_duckduckgo_url(redirect_url: str) -> str:
-    """Resolve DuckDuckGo redirect URLs to actual destination"""
-    try:
-        if redirect_url.startswith("https://duckduckgo.com/") or redirect_url.startswith("/"):
-            if redirect_url.startswith("/"):
-                redirect_url = "https://duckduckgo.com" + redirect_url
-            response = requests.head(redirect_url, allow_redirects=True, timeout=5)
-            return response.url
-        return redirect_url
-    except Exception:
-        return redirect_url
-
-def duckduckgo_search(query: str, limit: int = 5):
-    """Fetch search results from DuckDuckGo (no API key required)."""
-    try:
-        logger.info(f"Searching DuckDuckGo for: {query}")
-        url = "https://html.duckduckgo.com/html/"
-        params = {"q": query, "kl": "wt-wt"}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml",
-            "Accept-Language": "en-US,en;q=0.5",
-        }
-        
-        response = requests.post(url, data=params, headers=headers, timeout=15)
-        response.raise_for_status()
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = []
-
-        for result in soup.find_all("a", class_="result__a", href=True)[:limit*2]:
-            title = result.get_text(strip=True)
-            redirect_url = result["href"]
-            
-            if "duckduckgo.com" in redirect_url and "/y.js?" not in redirect_url:
-                continue
-                
-            actual_url = resolve_duckduckgo_url(redirect_url)
-            
-            results.append({
-                "title": title,
-                "url": actual_url
-            })
-            
-            if len(results) >= limit:
-                break
-
-        logger.info(f"Found {len(results)} results from DuckDuckGo")
-        return results
-        
-    except Exception as e:
-        logger.error(f"DuckDuckGo search failed: {e}")
-        return []
-
 # Fetch search results from multiple sources
 def fetch_search_results(query: str, limit: int = 5):
     """Fetch results from multiple sources"""
@@ -194,81 +134,62 @@ def fetch_search_results(query: str, limit: int = 5):
                 "url": result['url']
             })
     else:
-        # If no Google results, try DuckDuckGo as fallback
-        logger.info("No Google results found, trying DuckDuckGo")
-        ddg_results = duckduckgo_search(query, limit)
-        if ddg_results:
-            logger.info(f"Using {len(ddg_results)} results from DuckDuckGo")
-            all_results.extend(ddg_results)
+        # If no Google results, try Hacker News as fallback
+        logger.info("No Google results found, trying Hacker News")
+        hn_results = fetch_hn_search_results(query, limit)
+        if hn_results:
+            logger.info(f"Using {len(hn_results)} results from Hacker News")
+            all_results.extend(hn_results)
         else:
-            # If DuckDuckGo also fails, try Hacker News as last resort
-            logger.info("No DuckDuckGo results found, trying Hacker News")
-            hn_results = fetch_hn_search_results(query, limit)
-            if hn_results:
-                logger.info(f"Using {len(hn_results)} results from Hacker News")
-                all_results.extend(hn_results)
-            else:
-                logger.warning("No results found from any source")
+            logger.warning("No results found from any source")
     
     return all_results[:limit]
 
-# Async content extraction with timeouts
-async def extract_content(url: str):
-    """Extract content from webpage with proper timeout handling"""
+# Extract content from webpage with better error handling
+def extract_content(url: str):
     try:
         logger.info(f"Extracting content from: {url}")
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        response = requests.get(url, timeout=15, headers=headers)
+        response.raise_for_status()
         
-        timeout = Timeout(10.0)  # 10 second timeout
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Remove unwanted elements
+        for element in soup(["script", "style", "nav", "footer", "aside", "header"]):
+            element.decompose()
             
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Remove unwanted elements
-            for element in soup(["script", "style", "nav", "footer", "aside", "header"]):
-                element.decompose()
-                
-            title = soup.title.string if soup.title else "No title available"
-            
-            # Try to find main content areas
-            main_selectors = ["main", "article", "[role='main']", ".content", ".main", ".article", "#content", "#main", "#article"]
-            
-            main_content = None
-            for selector in main_selectors:
-                main_content = soup.select_one(selector)
-                if main_content:
-                    break
-                    
+        title = soup.title.string if soup.title else "No title available"
+        
+        # Try to find main content areas
+        main_selectors = ["main", "article", "[role='main']", ".content", ".main", ".article", "#content", "#main", "#article"]
+        
+        main_content = None
+        for selector in main_selectors:
+            main_content = soup.select_one(selector)
             if main_content:
-                text = main_content.get_text(separator=" ", strip=True)
-            else:
-                # Fallback to paragraph extraction
-                paragraphs = soup.find_all("p")
-                text = " ".join([p.get_text() for p in paragraphs[:10]])
-            
-            # Clean and limit text
-            text = ' '.join(text.split())
-            if len(text) > 8000:
-                text = text[:8000] + "..."
+                break
                 
-            logger.info(f"Successfully extracted content from {url}")
-            return {"title": title, "text": text, "success": True}
+        if main_content:
+            text = main_content.get_text(separator=" ", strip=True)
+        else:
+            # Fallback to paragraph extraction
+            paragraphs = soup.find_all("p")
+            text = " ".join([p.get_text() for p in paragraphs[:10]])  # Limit paragraphs
+        
+        # Clean and limit text
+        text = ' '.join(text.split())
+        if len(text) > 8000:
+            text = text[:8000] + "..."
             
-    except httpx.TimeoutException:
-        logger.error(f"Timeout extracting content from {url}")
-        return {"title": "Timeout", "text": "Request timed out after 10 seconds", "success": False}
-    except httpx.RequestError as e:
-        logger.error(f"Network error extracting content from {url}: {e}")
-        return {"title": "Network Error", "text": f"Network error: {str(e)}", "success": False}
+        logger.info(f"Successfully extracted content from {url}")
+        return {"title": title, "text": text, "success": True}
+        
     except Exception as e:
         logger.error(f"Failed to extract content from {url}: {e}")
-        return {"title": "Error", "text": f"Error: {str(e)}", "success": False}
+        return {"title": "Failed to extract content", "text": f"Error: {str(e)}", "success": False}
 
 # Summarize with Gemini
 def summarize_text(text: str, title: str = "") -> str:
@@ -279,9 +200,6 @@ def summarize_text(text: str, title: str = "") -> str:
         
         if not gemini_api_key:
             return "Gemini API key not configured. Please set GEMINI_API_KEY environment variable."
-        
-        if model is None:
-            return "No Gemini model available. Please check API access."
         
         # Create the prompt for Gemini
         prompt = f"""
@@ -316,7 +234,7 @@ async def search_ui(request: Request, query: str = Form(...)):
 
         for i, result in enumerate(web_results):
             logger.info(f"Processing result {i+1}/{len(web_results)}: {result['url']}")
-            content = await extract_content(result["url"])  # Async call
+            content = extract_content(result["url"])
             summary = summarize_text(content["text"], content["title"])
             extracted.append({
                 "url": result["url"],
@@ -324,7 +242,7 @@ async def search_ui(request: Request, query: str = Form(...)):
                 "summary": summary
             })
             # Add a small delay to avoid rate limiting
-            await asyncio.sleep(2)
+            time.sleep(0.5)
 
         return templates.TemplateResponse(
             "results.html", 
@@ -352,7 +270,7 @@ async def search_api(search_terms: SearchTerms):
     extracted = []
 
     for result in web_results:
-        content = await extract_content(result["url"])  # Async call
+        content = extract_content(result["url"])
         summary = summarize_text(content["text"], content["title"])
         extracted.append(ExtractedContent(
             url=result["url"],
@@ -360,7 +278,7 @@ async def search_api(search_terms: SearchTerms):
             summary=summary
         ))
         # Add a small delay to avoid rate limiting
-        await asyncio.sleep(2)
+        time.sleep(0.5)
 
     return extracted
 
@@ -394,6 +312,6 @@ async def debug_info():
     }
 
 # Run the application
-if __name__ == "__main__":
+if _name_ == "_main_":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
