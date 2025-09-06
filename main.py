@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -12,6 +12,7 @@ import logging
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import time
+import google.generativeai as genai
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,21 +21,17 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Setup OpenAI API key
-import google.generativeai as genai
-
-# Configure the API Key (set GEMINI_API_KEY in Render environment variables)
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# In your summarize function, replace the OpenAI call with:
+# Configure Gemini
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
+    logger.warning("GEMINI_API_KEY not found in environment variables")
+genai.configure(api_key=gemini_api_key)
 model = genai.GenerativeModel('gemini-pro')
-response = model.generate_content(f"Summarize this: {text_content}")
-summary = response.text
 
 # Initialize FastAPI
 app = FastAPI(
     title="AI Research Agent", 
-    description="Fetch web sources, extract content, and summarize with GPT.", 
+    description="Fetch web sources, extract content, and summarize with Gemini.", 
     version="1.0.0"
 )
 
@@ -42,6 +39,10 @@ app = FastAPI(
 current_dir = Path(__file__).parent
 templates_dir = current_dir / "templates"
 static_dir = current_dir / "static"
+
+# Create directories if they don't exist
+static_dir.mkdir(exist_ok=True)
+templates_dir.mkdir(exist_ok=True)
 
 # Mount static files and setup templates
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -60,7 +61,7 @@ class ExtractedContent(BaseModel):
     title: str
     summary: str
 
-# Google CSE Search function - FIXED VERSION
+# Google CSE Search function
 def google_cse_search(query: str, num_results: int = 5):
     """Search using Google Custom Search Engine API"""
     try:
@@ -108,7 +109,7 @@ def fetch_hn_search_results(query: str, limit: int = 5):
             if hit.get("title") and (hit.get("url") or hit.get("story_url")):
                 results.append({
                     "title": hit["title"],
-                    "url": hit["url"] or hit["story_url"]
+                    "url": hit["url"] or hit.get("story_url", "")
                 })
         
         logger.info(f"Found {len(results)} results from Hacker News")
@@ -117,7 +118,7 @@ def fetch_hn_search_results(query: str, limit: int = 5):
         logger.error(f"Hacker News search failed: {e}")
         return []
 
-# Fetch search results from multiple sources - FIXED VERSION
+# Fetch search results from multiple sources
 def fetch_search_results(query: str, limit: int = 5):
     """Fetch results from multiple sources"""
     all_results = []
@@ -190,23 +191,34 @@ def extract_content(url: str):
         logger.error(f"Failed to extract content from {url}: {e}")
         return {"title": "Failed to extract content", "text": f"Error: {str(e)}", "success": False}
 
-# Summarize with GPT with better error handling
-# Add new imports
-from transformers import pipeline
-
-# Create a summarization pipeline (loads the model)
-# This will download the model on the first run
-summarizer = pipeline("summarization", model="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
-
-@app.get("/summarize")
-async def summarize(url: str):
-    # ... your code to fetch URL and extract text ...
-    
-    # Summarize with the local model
-    summary_result = summarizer(text_content, max_length=150, min_length=30, do_sample=False)
-    summary = summary_result[0]['summary_text']
-    
-    return {"summary": summary}
+# Summarize with Gemini
+def summarize_text(text: str, title: str = "") -> str:
+    """Summarize text using Google Gemini"""
+    try:
+        if not text or len(text.strip()) < 50:
+            return "Not enough content to summarize."
+        
+        if not gemini_api_key:
+            return "Gemini API key not configured. Please set GEMINI_API_KEY environment variable."
+        
+        # Create the prompt for Gemini
+        prompt = f"""
+        Please provide a concise summary (2-3 paragraphs) of the following content:
+        
+        Title: {title}
+        
+        Content: {text[:8000]}
+        
+        Provide a clear and informative summary:
+        """
+        
+        # Generate content
+        response = model.generate_content(prompt)
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Gemini summarization failed: {e}")
+        return f"Summarization failed: {str(e)}"
 
 # API Endpoints
 @app.get("/", response_class=HTMLResponse)
@@ -272,17 +284,16 @@ async def search_api(search_terms: SearchTerms):
 
 @app.get("/health")
 async def health_check():
-    # Test if APIs are working
+    gemini_working = bool(os.getenv("GEMINI_API_KEY"))
     google_working = bool(os.getenv("GOOGLE_API_KEY") and os.getenv("GOOGLE_CSE_ID"))
-    openai_working = bool(os.getenv("OPENAI_API_KEY"))
     
-    status = "healthy" if google_working and openai_working else "degraded"
+    status = "healthy" if gemini_working else "degraded"
     
     return {
         "status": status,
         "services": {
             "google_cse": google_working,
-            "openai": openai_working
+            "gemini": gemini_working
         },
         "timestamp": time.time()
     }
@@ -297,7 +308,7 @@ async def debug_info():
         "static_dir_exists": static_dir.exists(),
         "google_api_key_set": bool(os.getenv("GOOGLE_API_KEY")),
         "google_cse_id_set": bool(os.getenv("GOOGLE_CSE_ID")),
-        "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY"))
+        "gemini_api_key_set": bool(os.getenv("GEMINI_API_KEY"))
     }
 
 # Run the application
