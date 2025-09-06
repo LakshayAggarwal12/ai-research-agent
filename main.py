@@ -26,6 +26,8 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 if not gemini_api_key:
     logger.warning("GEMINI_API_KEY not found in environment variables")
 genai.configure(api_key=gemini_api_key)
+
+# Use gemini-1.5-flash (most widely available and cheaper)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Initialize FastAPI
@@ -118,6 +120,65 @@ def fetch_hn_search_results(query: str, limit: int = 5):
         logger.error(f"Hacker News search failed: {e}")
         return []
 
+# DuckDuckGo Search function
+def resolve_duckduckgo_url(redirect_url: str) -> str:
+    """Resolve DuckDuckGo redirect URLs to actual destination"""
+    try:
+        if redirect_url.startswith("https://duckduckgo.com/") or redirect_url.startswith("/"):
+            # Follow the redirect to get the actual URL
+            if redirect_url.startswith("/"):
+                redirect_url = "https://duckduckgo.com" + redirect_url
+            response = requests.head(redirect_url, allow_redirects=True, timeout=5)
+            return response.url
+        return redirect_url
+    except Exception:
+        return redirect_url
+
+def duckduckgo_search(query: str, limit: int = 5):
+    """Fetch search results from DuckDuckGo (no API key required)."""
+    try:
+        logger.info(f"Searching DuckDuckGo for: {query}")
+        url = "https://html.duckduckgo.com/html/"
+        params = {"q": query, "kl": "wt-wt"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        response = requests.post(url, data=params, headers=headers, timeout=15)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        results = []
+
+        # Find all result links
+        for result in soup.find_all("a", class_="result__a", href=True)[:limit*2]:
+            title = result.get_text(strip=True)
+            redirect_url = result["href"]
+            
+            # Skip if it's a DuckDuckGo internal link
+            if "duckduckgo.com" in redirect_url and "/y.js?" not in redirect_url:
+                continue
+                
+            # Resolve the actual URL
+            actual_url = resolve_duckduckgo_url(redirect_url)
+            
+            results.append({
+                "title": title,
+                "url": actual_url
+            })
+            
+            if len(results) >= limit:
+                break
+
+        logger.info(f"Found {len(results)} results from DuckDuckGo")
+        return results
+        
+    except Exception as e:
+        logger.error(f"DuckDuckGo search failed: {e}")
+        return []
+
 # Fetch search results from multiple sources
 def fetch_search_results(query: str, limit: int = 5):
     """Fetch results from multiple sources"""
@@ -134,14 +195,21 @@ def fetch_search_results(query: str, limit: int = 5):
                 "url": result['url']
             })
     else:
-        # If no Google results, try Hacker News as fallback
-        logger.info("No Google results found, trying Hacker News")
-        hn_results = fetch_hn_search_results(query, limit)
-        if hn_results:
-            logger.info(f"Using {len(hn_results)} results from Hacker News")
-            all_results.extend(hn_results)
+        # If no Google results, try DuckDuckGo as fallback
+        logger.info("No Google results found, trying DuckDuckGo")
+        ddg_results = duckduckgo_search(query, limit)
+        if ddg_results:
+            logger.info(f"Using {len(ddg_results)} results from DuckDuckGo")
+            all_results.extend(ddg_results)
         else:
-            logger.warning("No results found from any source")
+            # If DuckDuckGo also fails, try Hacker News as last resort
+            logger.info("No DuckDuckGo results found, trying Hacker News")
+            hn_results = fetch_hn_search_results(query, limit)
+            if hn_results:
+                logger.info(f"Using {len(hn_results)} results from Hacker News")
+                all_results.extend(hn_results)
+            else:
+                logger.warning("No results found from any source")
     
     return all_results[:limit]
 
@@ -201,6 +269,9 @@ def summarize_text(text: str, title: str = "") -> str:
         if not gemini_api_key:
             return "Gemini API key not configured. Please set GEMINI_API_KEY environment variable."
         
+        if model is None:
+            return "No Gemini model available. Please check API access."
+        
         # Create the prompt for Gemini
         prompt = f"""
         Please provide a concise summary (2-3 paragraphs) of the following content:
@@ -242,7 +313,7 @@ async def search_ui(request: Request, query: str = Form(...)):
                 "summary": summary
             })
             # Add a small delay to avoid rate limiting
-            time.sleep(0.5)
+            time.sleep(2)  # Increased to 2 seconds to avoid rate limits
 
         return templates.TemplateResponse(
             "results.html", 
@@ -278,7 +349,7 @@ async def search_api(search_terms: SearchTerms):
             summary=summary
         ))
         # Add a small delay to avoid rate limiting
-        time.sleep(0.5)
+        time.sleep(2)  # Increased to 2 seconds to avoid rate limits
 
     return extracted
 
