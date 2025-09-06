@@ -212,7 +212,7 @@ def summarize_text(text: str, title: str = "") -> str:
         Provide a clear and informative summary:
         """
         
-    # Generate content
+        # Generate content
         response = model.generate_content(prompt)
         return response.text
         
