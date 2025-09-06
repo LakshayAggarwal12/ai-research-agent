@@ -213,8 +213,8 @@ def summarize_text(text: str, title: str = "") -> str:
         """
         
     # Generate content
-    response = model.generate_content(prompt)
-    return response.text
+        response = model.generate_content(prompt)
+        return response.text
         
     except Exception as e:
         logger.error(f"Gemini summarization failed: {e}")
