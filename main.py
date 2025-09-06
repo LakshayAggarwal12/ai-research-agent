@@ -5,7 +5,6 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
-import openai
 import os
 from pathlib import Path
 from typing import List
@@ -22,7 +21,15 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Setup OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+import google.generativeai as genai
+
+# Configure the API Key (set GEMINI_API_KEY in Render environment variables)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# In your summarize function, replace the OpenAI call with:
+model = genai.GenerativeModel('gemini-pro')
+response = model.generate_content(f"Summarize this: {text_content}")
+summary = response.text
 
 # Initialize FastAPI
 app = FastAPI(
