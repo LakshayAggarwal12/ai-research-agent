@@ -13,6 +13,9 @@ from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import time
 import google.generativeai as genai
+import asyncio
+import httpx
+from httpx import Timeout
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -125,7 +128,6 @@ def resolve_duckduckgo_url(redirect_url: str) -> str:
     """Resolve DuckDuckGo redirect URLs to actual destination"""
     try:
         if redirect_url.startswith("https://duckduckgo.com/") or redirect_url.startswith("/"):
-            # Follow the redirect to get the actual URL
             if redirect_url.startswith("/"):
                 redirect_url = "https://duckduckgo.com" + redirect_url
             response = requests.head(redirect_url, allow_redirects=True, timeout=5)
@@ -152,16 +154,13 @@ def duckduckgo_search(query: str, limit: int = 5):
         soup = BeautifulSoup(response.text, "html.parser")
         results = []
 
-        # Find all result links
         for result in soup.find_all("a", class_="result__a", href=True)[:limit*2]:
             title = result.get_text(strip=True)
             redirect_url = result["href"]
             
-            # Skip if it's a DuckDuckGo internal link
             if "duckduckgo.com" in redirect_url and "/y.js?" not in redirect_url:
                 continue
                 
-            # Resolve the actual URL
             actual_url = resolve_duckduckgo_url(redirect_url)
             
             results.append({
@@ -213,51 +212,63 @@ def fetch_search_results(query: str, limit: int = 5):
     
     return all_results[:limit]
 
-# Extract content from webpage with better error handling
-def extract_content(url: str):
+# Async content extraction with timeouts
+async def extract_content(url: str):
+    """Extract content from webpage with proper timeout handling"""
     try:
         logger.info(f"Extracting content from: {url}")
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
         }
-        response = requests.get(url, timeout=15, headers=headers)
-        response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Remove unwanted elements
-        for element in soup(["script", "style", "nav", "footer", "aside", "header"]):
-            element.decompose()
+        timeout = Timeout(10.0)  # 10 second timeout
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
             
-        title = soup.title.string if soup.title else "No title available"
-        
-        # Try to find main content areas
-        main_selectors = ["main", "article", "[role='main']", ".content", ".main", ".article", "#content", "#main", "#article"]
-        
-        main_content = None
-        for selector in main_selectors:
-            main_content = soup.select_one(selector)
-            if main_content:
-                break
+            soup = BeautifulSoup(response.text, "html.parser")
+            
+            # Remove unwanted elements
+            for element in soup(["script", "style", "nav", "footer", "aside", "header"]):
+                element.decompose()
                 
-        if main_content:
-            text = main_content.get_text(separator=" ", strip=True)
-        else:
-            # Fallback to paragraph extraction
-            paragraphs = soup.find_all("p")
-            text = " ".join([p.get_text() for p in paragraphs[:10]])  # Limit paragraphs
-        
-        # Clean and limit text
-        text = ' '.join(text.split())
-        if len(text) > 8000:
-            text = text[:8000] + "..."
+            title = soup.title.string if soup.title else "No title available"
             
-        logger.info(f"Successfully extracted content from {url}")
-        return {"title": title, "text": text, "success": True}
-        
+            # Try to find main content areas
+            main_selectors = ["main", "article", "[role='main']", ".content", ".main", ".article", "#content", "#main", "#article"]
+            
+            main_content = None
+            for selector in main_selectors:
+                main_content = soup.select_one(selector)
+                if main_content:
+                    break
+                    
+            if main_content:
+                text = main_content.get_text(separator=" ", strip=True)
+            else:
+                # Fallback to paragraph extraction
+                paragraphs = soup.find_all("p")
+                text = " ".join([p.get_text() for p in paragraphs[:10]])
+            
+            # Clean and limit text
+            text = ' '.join(text.split())
+            if len(text) > 8000:
+                text = text[:8000] + "..."
+                
+            logger.info(f"Successfully extracted content from {url}")
+            return {"title": title, "text": text, "success": True}
+            
+    except httpx.TimeoutException:
+        logger.error(f"Timeout extracting content from {url}")
+        return {"title": "Timeout", "text": "Request timed out after 10 seconds", "success": False}
+    except httpx.RequestError as e:
+        logger.error(f"Network error extracting content from {url}: {e}")
+        return {"title": "Network Error", "text": f"Network error: {str(e)}", "success": False}
     except Exception as e:
         logger.error(f"Failed to extract content from {url}: {e}")
-        return {"title": "Failed to extract content", "text": f"Error: {str(e)}", "success": False}
+        return {"title": "Error", "text": f"Error: {str(e)}", "success": False}
 
 # Summarize with Gemini
 def summarize_text(text: str, title: str = "") -> str:
@@ -305,7 +316,7 @@ async def search_ui(request: Request, query: str = Form(...)):
 
         for i, result in enumerate(web_results):
             logger.info(f"Processing result {i+1}/{len(web_results)}: {result['url']}")
-            content = extract_content(result["url"])
+            content = await extract_content(result["url"])  # Async call
             summary = summarize_text(content["text"], content["title"])
             extracted.append({
                 "url": result["url"],
@@ -313,7 +324,7 @@ async def search_ui(request: Request, query: str = Form(...)):
                 "summary": summary
             })
             # Add a small delay to avoid rate limiting
-            time.sleep(2)  # Increased to 2 seconds to avoid rate limits
+            await asyncio.sleep(2)
 
         return templates.TemplateResponse(
             "results.html", 
@@ -341,7 +352,7 @@ async def search_api(search_terms: SearchTerms):
     extracted = []
 
     for result in web_results:
-        content = extract_content(result["url"])
+        content = await extract_content(result["url"])  # Async call
         summary = summarize_text(content["text"], content["title"])
         extracted.append(ExtractedContent(
             url=result["url"],
@@ -349,7 +360,7 @@ async def search_api(search_terms: SearchTerms):
             summary=summary
         ))
         # Add a small delay to avoid rate limiting
-        time.sleep(2)  # Increased to 2 seconds to avoid rate limits
+        await asyncio.sleep(2)
 
     return extracted
 
