@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
