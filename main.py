@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  
 
 # Load environment variables
 load_dotenv()
@@ -36,7 +36,7 @@ app = FastAPI(
 )
 
 # Get the current directory and setup paths
-current_dir = Path(_file_).parent
+current_dir = Path(__file__).parent  
 templates_dir = current_dir / "templates"
 static_dir = current_dir / "static"
 
@@ -312,6 +312,6 @@ async def debug_info():
     }
 
 # Run the application
-if _name_ == "_main_":
+if __name__ == "__main__":  
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
