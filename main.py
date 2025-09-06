@@ -191,32 +191,22 @@ def extract_content(url: str):
         return {"title": "Failed to extract content", "text": f"Error: {str(e)}", "success": False}
 
 # Summarize with GPT with better error handling
-def summarize_text(text: str, source_title: str = "") -> str:
-    try:
-        if "Error:" in text or "Failed to extract" in text:
-            return "Could not extract content from this page for summarization."
-        
-        prompt = f"""
-        Please provide a concise summary of the following content from "{source_title}".
-        Focus on the key points, main ideas, and important information.
-        
-        Content to summarize:
-        {text}
-        """
-        
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful research assistant that creates clear, concise summaries of web content."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=250,
-            temperature=0.3
-        )
-        return response.choices[0].message["content"].strip()
-    except Exception as e:
-        logger.error(f"Summarization failed: {e}")
-        return f"Summarization failed: {str(e)}"
+# Add new imports
+from transformers import pipeline
+
+# Create a summarization pipeline (loads the model)
+# This will download the model on the first run
+summarizer = pipeline("summarization", model="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+
+@app.get("/summarize")
+async def summarize(url: str):
+    # ... your code to fetch URL and extract text ...
+    
+    # Summarize with the local model
+    summary_result = summarizer(text_content, max_length=150, min_length=30, do_sample=False)
+    summary = summary_result[0]['summary_text']
+    
+    return {"summary": summary}
 
 # API Endpoints
 @app.get("/", response_class=HTMLResponse)
