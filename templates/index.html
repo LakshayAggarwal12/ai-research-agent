@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Home - AI Research Agent{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero-section">
+    <div class="container">
+        <div class="row align-items-center min-vh-75">
+            <div class="col-lg-6">
+                <h1 class="hero-title">Intelligent Research <span class="text-gradient">Powered by AI</span></h1>
+                <p class="hero-subtitle">Discover, analyze, and summarize information from across the web with our advanced AI research assistant.</p>
+                
+                <div class="hero-features">
+                    <div class="feature-item">
+                        <i class="fas fa-search feature-icon"></i>
+                        <span>Smart Web Search</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-brain feature-icon"></i>
+                        <span>AI-Powered Analysis</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-file-alt feature-icon"></i>
+                        <span>Concise Summaries</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="hero-visual">
+                    <div class="ai-orb"></div>
+                    <div class="particles-container" id="particles"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Search Section -->
+<section class="search-section py-5">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="search-card">
+                    <div class="card-header">
+                        <h2 class="text-center mb-4">
+                            <i class="fas fa-search me-2"></i>
+                            Start Your Research
+                        </h2>
+                        <p class="text-center text-muted">Enter your research topic below to find and summarize relevant information from across the web.</p>
+                    </div>
+                    <div class="card-body">
+                        <form id="searchForm" action="/search" method="post">
+                            <div class="form-group">
+                                <label for="query" class="form-label">
+                                    <i class="fas fa-lightbulb me-2"></i>
+                                    Research Topic
+                                </label>
+                                <input type="text" class="form-control form-control-lg" id="query" name="query" 
+                                       placeholder="Enter your research topic (e.g., Artificial Intelligence, Climate Change, etc.)" required>
+                                <div class="form-text">Be specific for better results</div>
+                            </div>
+                            
+                            <div class="d-grid mt-4">
+                                <button type="submit" class="btn btn-primary btn-lg btn-gradient">
+                                    <span id="submitText">
+                                        <i class="fas fa-rocket me-2"></i>
+                                        Start Research
+                                    </span>
+                                    <div id="loadingSpinner" class="spinner-border spinner-border-sm ms-2 d-none" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Examples -->
+                <div class="examples-section mt-5">
+                    <h5 class="text-center mb-3">Try these examples:</h5>
+                    <div class="d-flex flex-wrap justify-content-center gap-2">
+                        <a href="#" class="example-pill" data-query="Machine Learning">Machine Learning</a>
+                        <a href="#" class="example-pill" data-query="Renewable Energy">Renewable Energy</a>
+                        <a href="#" class="example-pill" data-query="Quantum Computing">Quantum Computing</a>
+                        <a href="#" class="example-pill" data-query="Digital Marketing">Digital Marketing</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="features-section bg-light py-5">
+    <div class="container">
+        <div class="text-center mb-5">
+            <h2>Why Choose AI Research Agent?</h2>
+            <p class="lead">Powerful features that make research effortless</p>
+        </div>
+        <div class="row">
+            <div class="col-md-4 feature-card">
+                <div class="feature-icon-wrapper">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <h4>Fast & Efficient</h4>
+                <p>Get comprehensive research results in seconds, not hours.</p>
+            </div>
+            <div class="col-md-4 feature-card">
+                <div class="feature-icon-wrapper">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <h4>AI-Powered</h4>
+                <p>Advanced AI algorithms analyze and summarize content intelligently.</p>
+            </div>
+            <div class="col-md-4 feature-card">
+                <div class="feature-icon-wrapper">
+                    <i class="fas fa-globe"></i>
+                </div>
+                <h4>Web-Wide Search</h4>
+                <p>Access information from across the entire web with our search technology.</p>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
