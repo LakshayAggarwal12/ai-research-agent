@@ -50,6 +50,108 @@ templates_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=templates_dir)
 
+# Check if templates exist, create if missing
+if not (templates_dir / "index.html").exists() or not (templates_dir / "results.html").exists():
+    logger.warning("Templates missing, creating default templates")
+    create_default_templates()
+else:
+    logger.info("Templates found and ready")
+
+# Create default templates if they don't exist
+def create_default_templates():
+    """Create default HTML templates if they don't exist"""
+    
+    # Create index.html
+    index_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Research Agent</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { background: #f5f5f5; padding: 30px; border-radius: 10px; }
+        input[type="text"] { width: 70%; padding: 10px; font-size: 16px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        .result { margin: 20px 0; padding: 15px; background: white; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 AI Research Agent</h1>
+        <form method="post" action="/research">
+            <input type="text" name="query" placeholder="Enter research topic..." required>
+            <button type="submit">Research</button>
+        </form>
+    </div>
+</body>
+</html>"""
+    
+    # Create results.html
+    results_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Research Results</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; }
+        .result { margin: 20px 0; padding: 20px; background: #f9f9f9; border-radius: 8px; border-left: 4px solid #007bff; }
+        .url { color: #0066cc; font-size: 14px; }
+        .score { background: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .error { background: #ffebee; color: #c62828; padding: 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>📊 Research Results for: "{{ query }}"</h1>
+    <a href="/">← New Search</a>
+    
+    {% if error %}
+        <div class="error">
+            <h3>Error</h3>
+            <p>{{ error }}</p>
+        </div>
+    {% endif %}
+    
+    {% if results %}
+        <p>Found {{ results|length }} results:</p>
+        {% for result in results %}
+            <div class="result">
+                <h3>{{ result.title }}</h3>
+                <div class="url">{{ result.url }}</div>
+                {% if result.credibility_score > 0 %}
+                    <span class="score">Credibility: {{ result.credibility_score }}/100</span>
+                {% endif %}
+                <p><strong>Summary:</strong> {{ result.summary }}</p>
+                {% if result.key_points %}
+                    <div>
+                        <strong>Key Points:</strong>
+                        <ul>
+                            {% for point in result.key_points %}
+                                <li>{{ point }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <p>No results found. Try a different search term.</p>
+    {% endif %}
+</body>
+</html>"""
+    
+    # Create templates directory if it doesn't exist
+    templates_dir.mkdir(exist_ok=True)
+    
+    # Write template files
+    (templates_dir / "index.html").write_text(index_html)
+    (templates_dir / "results.html").write_text(results_html)
+    logger.info("Default templates created")
+
+# Call this function after template setup
+create_default_templates()
+
 # Data Models
 class SearchTerms(BaseModel):
     query: str
@@ -354,6 +456,20 @@ def conduct_research(query: str, max_results: int = 6):
     
     return unique_results
 
+@app.get("/debug-templates")
+async def debug_templates():
+    """Check if templates exist and are readable"""
+    index_path = templates_dir / "index.html"
+    results_path = templates_dir / "results.html"
+    
+    return {
+        "templates_dir": str(templates_dir),
+        "index_exists": index_path.exists(),
+        "results_exists": results_path.exists(),
+        "index_content": index_path.read_text()[:100] + "..." if index_path.exists() else "MISSING",
+        "results_content": results_path.read_text()[:100] + "..." if results_path.exists() else "MISSING"
+    }
+
 # API Endpoints
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -362,6 +478,17 @@ async def root(request: Request):
 @app.post("/research", response_class=HTMLResponse)
 async def research_ui(request: Request, query: str = Form(...)):
     try:
+        if not query or len(query.strip()) < 2:
+            return templates.TemplateResponse(
+                "results.html", 
+                {
+                    "request": request, 
+                    "query": query,
+                    "error": "Please enter a valid search term (at least 2 characters)",
+                    "results": []
+                }
+            )
+        
         logger.info(f"Processing research query: {query}")
         research_results = conduct_research(query)
         analyzed_results = []
@@ -370,6 +497,12 @@ async def research_ui(request: Request, query: str = Form(...)):
             logger.info(f"Analyzing result {i+1}/{len(research_results)}: {result['url']}")
             
             content = extract_research_content(result["url"])
+            
+            # Skip if content extraction failed
+            if not content["success"]:
+                logger.warning(f"Content extraction failed for {result['url']}")
+                continue
+                
             analysis = generate_research_summary(
                 content["text"], 
                 content["title"],
@@ -379,15 +512,13 @@ async def research_ui(request: Request, query: str = Form(...)):
             analyzed_results.append({
                 "url": result["url"],
                 "title": content["title"],
-                "source": result["source"],
+                "source": result.get("source", "unknown"),
                 "summary": analysis["summary"],
                 "key_points": analysis["key_points"],
                 "credibility_score": analysis["credibility_score"],
-                "display_url": result.get("display_url", ""),
-                "snippet": result.get("snippet", "")[:150] + "..." if result.get("snippet") else ""
+                "display_url": result.get("display_url", result["url"][:50] + "..."),
             })
             
-            # Add delay to respect rate limits
             time.sleep(1.2)
 
         return templates.TemplateResponse(
@@ -411,6 +542,7 @@ async def research_ui(request: Request, query: str = Form(...)):
                 "results": []
             }
         )
+        
 
 @app.get("/health")
 async def health_check():
