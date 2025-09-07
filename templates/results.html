@@ -92,7 +92,7 @@
                         <div class="card-footer">
                             <small class="text-muted">
                                 <i class="fas fa-globe me-1"></i>
-                                {{ result.url|truncate(60) }}
+                                {{ result.url[:60] }}{% if result.url|length > 60 %}...{% endif %}
                             </small>
                         </div>
                     </div>
