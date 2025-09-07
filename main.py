@@ -13,10 +13,12 @@ from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import time
 import google.generativeai as genai
+import re
+import random
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)  
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -31,12 +33,12 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 # Initialize FastAPI
 app = FastAPI(
     title="AI Research Agent", 
-    description="Fetch web sources, extract content, and summarize with Gemini.", 
+    description="Search engine research with enhanced content extraction and analysis.", 
     version="1.0.0"
 )
 
 # Get the current directory and setup paths
-current_dir = Path(__file__).parent  
+current_dir = Path(__file__).parent
 templates_dir = current_dir / "templates"
 static_dir = current_dir / "static"
 
@@ -55,26 +57,53 @@ class SearchTerms(BaseModel):
 class SearchResult(BaseModel):
     title: str
     url: str
+    source: str
+    snippet: str
 
-class ExtractedContent(BaseModel):
+class ResearchResult(BaseModel):
     url: str
     title: str
+    source: str
     summary: str
+    key_points: List[str]
+    credibility_score: int
+
+# Search Engines Configuration
+SEARCH_ENGINES = {
+    "google": {
+        "name": "Google Search",
+        "weight": 0.8
+    },
+    "hackernews": {
+        "name": "Hacker News",
+        "weight": 0.6
+    },
+    "scholar": {
+        "name": "Academic Sources",
+        "weight": 0.9
+    }
+}
 
 # Google CSE Search function
-def google_cse_search(query: str, num_results: int = 5):
+def google_cse_search(query: str, num_results: int = 8):
     """Search using Google Custom Search Engine API"""
     try:
         api_key = os.getenv("GOOGLE_API_KEY")
         cse_id = os.getenv("GOOGLE_CSE_ID")
         
         if not api_key or not cse_id:
-            logger.warning("Google API key or CSE ID not found in environment variables")
+            logger.warning("Google API key or CSE ID not found")
             return []
         
         logger.info(f"Searching Google CSE for: {query}")
         service = build("customsearch", "v1", developerKey=api_key)
-        result = service.cse().list(q=query, cx=cse_id, num=num_results).execute()
+        result = service.cse().list(
+            q=query, 
+            cx=cse_id, 
+            num=num_results,
+            gl="us",
+            lr="lang_en"
+        ).execute()
         
         search_results = []
         if 'items' in result:
@@ -83,33 +112,40 @@ def google_cse_search(query: str, num_results: int = 5):
                 search_results.append({
                     'title': item.get('title', 'No title'),
                     'url': item.get('link', ''),
-                    'snippet': item.get('snippet', 'No snippet available')
+                    'snippet': item.get('snippet', ''),
+                    'source': 'google',
+                    'display_url': item.get('displayLink', '')
                 })
-        else:
-            logger.warning("No items found in Google CSE response")
-        
         return search_results
     except Exception as e:
         logger.error(f"Google CSE API error: {e}")
         return []
 
 # Hacker News Search function
-def fetch_hn_search_results(query: str, limit: int = 5):
-    """Hacker News search function"""
+def fetch_hn_search_results(query: str, limit: int = 4):
+    """Hacker News search function for technical content"""
     try:
         logger.info(f"Searching Hacker News for: {query}")
         url = "http://hn.algolia.com/api/v1/search"
-        params = {"query": query, "hitsPerPage": limit}
+        params = {
+            "query": query, 
+            "hitsPerPage": limit,
+            "tags": "story",
+            "numericFilters": "points>10"
+        }
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
         results = []
         for hit in data["hits"]:
-            if hit.get("title") and (hit.get("url") or hit.get("story_url")):
+            if hit.get("title") and hit.get("url"):
                 results.append({
                     "title": hit["title"],
-                    "url": hit["url"] or hit.get("story_url", "")
+                    "url": hit["url"],
+                    "snippet": hit.get("_highlightResult", {}).get("content", {}).get("value", "")[:200] if hit.get("_highlightResult", {}).get("content") else "",
+                    "source": "hackernews",
+                    "display_url": "news.ycombinator.com"
                 })
         
         logger.info(f"Found {len(results)} results from Hacker News")
@@ -118,179 +154,271 @@ def fetch_hn_search_results(query: str, limit: int = 5):
         logger.error(f"Hacker News search failed: {e}")
         return []
 
-# Fetch search results from multiple sources
-def fetch_search_results(query: str, limit: int = 5):
-    """Fetch results from multiple sources"""
-    all_results = []
-    
-    # Try Google CSE first (primary source)
-    google_results = google_cse_search(query, limit)
-    
-    if google_results:
-        logger.info(f"Using {len(google_results)} results from Google CSE")
-        for result in google_results:
-            all_results.append({
-                "title": result['title'],
-                "url": result['url']
-            })
-    else:
-        # If no Google results, try Hacker News as fallback
-        logger.info("No Google results found, trying Hacker News")
-        hn_results = fetch_hn_search_results(query, limit)
-        if hn_results:
-            logger.info(f"Using {len(hn_results)} results from Hacker News")
-            all_results.extend(hn_results)
-        else:
-            logger.warning("No results found from any source")
-    
-    return all_results[:limit]
-
-# Extract content from webpage with better error handling
-def extract_content(url: str):
+# Enhanced content extraction with better parsing
+def extract_research_content(url: str):
+    """Enhanced content extraction for research purposes"""
     try:
-        logger.info(f"Extracting content from: {url}")
+        logger.info(f"Extracting research content from: {url}")
+        
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         }
-        response = requests.get(url, timeout=15, headers=headers)
+        
+        response = requests.get(url, timeout=12, headers=headers)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, "html.parser")
         
         # Remove unwanted elements
-        for element in soup(["script", "style", "nav", "footer", "aside", "header"]):
+        for element in soup(["script", "style", "nav", "footer", "aside", "header", "form", "button"]):
             element.decompose()
-            
+        
+        # Extract title
         title = soup.title.string if soup.title else "No title available"
         
-        # Try to find main content areas
-        main_selectors = ["main", "article", "[role='main']", ".content", ".main", ".article", "#content", "#main", "#article"]
+        # Try to identify article structure
+        article_selectors = [
+            "article", "[role='main']", "main", ".article", ".content", 
+            ".post", ".blog-post", ".story", ".main-content", "#content"
+        ]
         
         main_content = None
-        for selector in main_selectors:
-            main_content = soup.select_one(selector)
-            if main_content:
-                break
-                
-        if main_content:
-            text = main_content.get_text(separator=" ", strip=True)
-        else:
-            # Fallback to paragraph extraction
-            paragraphs = soup.find_all("p")
-            text = " ".join([p.get_text() for p in paragraphs[:10]])  # Limit paragraphs
+        content_source = "body"
         
-        # Clean and limit text
-        text = ' '.join(text.split())
-        if len(text) > 8000:
-            text = text[:8000] + "..."
-            
-        logger.info(f"Successfully extracted content from {url}")
-        return {"title": title, "text": text, "success": True}
+        for selector in article_selectors:
+            found = soup.select_one(selector)
+            if found:
+                main_content = found
+                content_source = selector
+                break
+        
+        if not main_content:
+            main_content = soup.body
+            content_source = "body"
+        
+        # Clean and extract text
+        text = main_content.get_text(separator="\n", strip=True)
+        
+        # Remove excessive whitespace and clean up
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Extract meaningful paragraphs
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 100]
+        
+        if paragraphs:
+            text = '\n\n'.join(paragraphs[:8])  # Take top 8 paragraphs
+        else:
+            # Fallback: use first 1000 characters
+            text = text[:1000]
+        
+        # Limit text length
+        if len(text) > 6000:
+            text = text[:6000] + "..."
+        
+        # Extract metadata
+        meta_description = soup.find("meta", attrs={"name": "description"})
+        description = meta_description["content"] if meta_description else ""
+        
+        # Determine content type
+        content_type = "article"
+        if any(x in url for x in ['.pdf', '.doc', '.docx']):
+            content_type = "document"
+        elif any(x in url for x in ['github.com', 'stackoverflow.com']):
+            content_type = "technical"
+        
+        logger.info(f"Successfully extracted {content_type} content from {url}")
+        
+        return {
+            "title": title,
+            "text": text,
+            "description": description,
+            "content_type": content_type,
+            "content_source": content_source,
+            "success": True
+        }
         
     except Exception as e:
         logger.error(f"Failed to extract content from {url}: {e}")
-        return {"title": "Failed to extract content", "text": f"Error: {str(e)}", "success": False}
+        return {
+            "title": "Content extraction failed",
+            "text": f"Unable to extract content: {str(e)}",
+            "description": "",
+            "content_type": "error",
+            "success": False
+        }
 
-# Summarize with Gemini
-def summarize_text(text: str, title: str = "") -> str:
-    """Summarize text using Google Gemini"""
+# Enhanced summarization with research focus
+def generate_research_summary(text: str, title: str = "", content_type: str = "article") -> dict:
+    """Generate comprehensive research summary with key points"""
     try:
-        if not text or len(text.strip()) < 50:
-            return "Not enough content to summarize."
+        if not text or len(text.strip()) < 100:
+            return {
+                "summary": "Insufficient content for meaningful analysis.",
+                "key_points": [],
+                "credibility_score": 0
+            }
         
         if not gemini_api_key:
-            return "Gemini API key not configured. Please set GEMINI_API_KEY environment variable."
+            return {
+                "summary": "API configuration required.",
+                "key_points": [],
+                "credibility_score": 0
+            }
         
-        # Create the prompt for Gemini
+        # Create research-focused prompt
         prompt = f"""
-        Please provide a concise summary (2-3 paragraphs) of the following content:
+        Analyze this {content_type} content for research purposes and provide:
+        
+        1. A comprehensive 3-paragraph summary
+        2. 5 key bullet points of main ideas/findings
+        3. Credibility assessment score (1-100)
         
         Title: {title}
         
-        Content: {text[:8000]}
+        Content: {text[:5000]}
         
-        Provide a clear and informative summary:
+        Provide output in this exact format:
+        SUMMARY: [your summary here]
+        KEY_POINTS: [bullet point 1] | [bullet point 2] | [bullet point 3] | [bullet point 4] | [bullet point 5]
+        CREDIBILITY: [score 1-100]
         """
         
-        # Generate content
         response = model.generate_content(prompt)
-        return response.text
+        result_text = response.text
+        
+        # Parse the response
+        summary = "Analysis unavailable"
+        key_points = []
+        credibility_score = 50  # Default neutral score
+        
+        if "SUMMARY:" in result_text:
+            parts = result_text.split("SUMMARY:")
+            if len(parts) > 1:
+                summary_part = parts[1].split("KEY_POINTS:")[0].strip()
+                summary = summary_part
+        
+        if "KEY_POINTS:" in result_text:
+            kp_part = result_text.split("KEY_POINTS:")[1].split("CREDIBILITY:")[0].strip()
+            key_points = [kp.strip() for kp in kp_part.split("|") if kp.strip()][:5]
+        
+        if "CREDIBILITY:" in result_text:
+            try:
+                cred_part = result_text.split("CREDIBILITY:")[1].strip()
+                credibility_score = min(100, max(1, int(cred_part.split()[0])))
+            except:
+                pass
+        
+        return {
+            "summary": summary,
+            "key_points": key_points,
+            "credibility_score": credibility_score
+        }
         
     except Exception as e:
-        logger.error(f"Gemini summarization failed: {e}")
-        return f"Summarization failed: {str(e)}"
+        logger.error(f"Research analysis failed: {e}")
+        return {
+            "summary": f"Analysis failed: {str(e)}",
+            "key_points": [],
+            "credibility_score": 0
+        }
+
+# Main research function
+def conduct_research(query: str, max_results: int = 6):
+    """Conduct comprehensive research across multiple sources"""
+    all_results = []
+    
+    # Get results from multiple sources
+    google_results = google_cse_search(query, max_results)
+    hn_results = fetch_hn_search_results(query, min(3, max_results//2))
+    
+    # Combine and prioritize results
+    if google_results:
+        all_results.extend(google_results)
+    if hn_results:
+        all_results.extend(hn_results)
+    
+    # Remove duplicates and limit results
+    seen_urls = set()
+    unique_results = []
+    
+    for result in all_results:
+        if result['url'] not in seen_urls and len(unique_results) < max_results:
+            seen_urls.add(result['url'])
+            unique_results.append(result)
+    
+    return unique_results
 
 # API Endpoints
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/search", response_class=HTMLResponse)
-async def search_ui(request: Request, query: str = Form(...)):
+@app.post("/research", response_class=HTMLResponse)
+async def research_ui(request: Request, query: str = Form(...)):
     try:
-        logger.info(f"Processing search query: {query}")
-        web_results = fetch_search_results(query)
-        extracted = []
+        logger.info(f"Processing research query: {query}")
+        research_results = conduct_research(query)
+        analyzed_results = []
 
-        for i, result in enumerate(web_results):
-            logger.info(f"Processing result {i+1}/{len(web_results)}: {result['url']}")
-            content = extract_content(result["url"])
-            summary = summarize_text(content["text"], content["title"])
-            extracted.append({
+        for i, result in enumerate(research_results):
+            logger.info(f"Analyzing result {i+1}/{len(research_results)}: {result['url']}")
+            
+            content = extract_research_content(result["url"])
+            analysis = generate_research_summary(
+                content["text"], 
+                content["title"],
+                content["content_type"]
+            )
+            
+            analyzed_results.append({
                 "url": result["url"],
                 "title": content["title"],
-                "summary": summary
+                "source": result["source"],
+                "summary": analysis["summary"],
+                "key_points": analysis["key_points"],
+                "credibility_score": analysis["credibility_score"],
+                "display_url": result.get("display_url", ""),
+                "snippet": result.get("snippet", "")[:150] + "..." if result.get("snippet") else ""
             })
-            # Add a small delay to avoid rate limiting
-            time.sleep(0.5)
+            
+            # Add delay to respect rate limits
+            time.sleep(1.2)
 
         return templates.TemplateResponse(
             "results.html", 
             {
                 "request": request, 
                 "query": query,
-                "results": extracted
+                "results": analyzed_results,
+                "total_results": len(analyzed_results)
             }
         )
+        
     except Exception as e:
-        logger.error(f"Search UI error: {e}")
+        logger.error(f"Research UI error: {e}")
         return templates.TemplateResponse(
             "results.html", 
             {
                 "request": request, 
                 "query": query,
-                "error": f"An error occurred: {str(e)}",
+                "error": f"Research error: {str(e)}",
                 "results": []
             }
         )
-
-@app.post("/api/search", response_model=List[ExtractedContent])
-async def search_api(search_terms: SearchTerms):
-    web_results = fetch_search_results(search_terms.query)
-    extracted = []
-
-    for result in web_results:
-        content = extract_content(result["url"])
-        summary = summarize_text(content["text"], content["title"])
-        extracted.append(ExtractedContent(
-            url=result["url"],
-            title=content["title"],
-            summary=summary
-        ))
-        # Add a small delay to avoid rate limiting
-        time.sleep(0.5)
-
-    return extracted
 
 @app.get("/health")
 async def health_check():
     gemini_working = bool(os.getenv("GEMINI_API_KEY"))
     google_working = bool(os.getenv("GOOGLE_API_KEY") and os.getenv("GOOGLE_CSE_ID"))
     
-    status = "healthy" if gemini_working else "degraded"
-    
     return {
-        "status": status,
+        "status": "operational" if gemini_working else "degraded",
         "services": {
             "google_cse": google_working,
             "gemini": gemini_working
@@ -298,20 +426,7 @@ async def health_check():
         "timestamp": time.time()
     }
 
-@app.get("/debug")
-async def debug_info():
-    return {
-        "current_dir": str(current_dir),
-        "templates_dir": str(templates_dir),
-        "templates_dir_exists": templates_dir.exists(),
-        "static_dir": str(static_dir),
-        "static_dir_exists": static_dir.exists(),
-        "google_api_key_set": bool(os.getenv("GOOGLE_API_KEY")),
-        "google_cse_id_set": bool(os.getenv("GOOGLE_CSE_ID")),
-        "gemini_api_key_set": bool(os.getenv("GEMINI_API_KEY"))
-    }
-
 # Run the application
-if __name__ == "__main__":  
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
