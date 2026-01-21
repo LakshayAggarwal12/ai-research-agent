@@ -6,7 +6,7 @@ Unlike traditional research tools, it:
 
 ✅ Requires no API keys
 
-✅ Extracts meaningful content from articles
+✅ Extracts meaningful content from articles/summerization 
 
 ✅ Generates automatic summaries and key points
 
