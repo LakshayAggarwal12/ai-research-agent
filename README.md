@@ -67,7 +67,7 @@ ai-research-agent/
 
 ⚙️ Installation & Setup
 🔹 Clone the Repository
-git clone https://github.com/your-username/ai-research-agent.git
+git clone https://github.com/LakshayAggarwal12/ai-research-agent
 cd ai-research-agent
 
 🔹 Create Virtual Environment
